@@ -144,124 +144,87 @@ void Info_SetValueForKey_Big( char *s, const char *key, const char *value ) {
 
 int get_client_number(client_t* cl);
 
-int QDECL SV_ClientCommand(client_t *cl, msg_t *msg) {
-    int seq, clientNum;
-    const char *s;
-    char *cmd;
+int QDECL SV_ClientCommand(client_t *cl, msg_t *msg)
+{
+	//printf("####### SV_ClientCommand \n");
 
-    qboolean clientOk = qtrue;
-    qboolean floodprotect = qtrue;
+	int seq;
+	const char *s;
+	char *cmd;
 
-    clientNum = get_client_number(cl);
+	qboolean clientOk = qtrue;
+	qboolean floodprotect = qtrue;
 
-    seq = MSG_ReadLong(msg);
-    s = MSG_ReadString(msg);
+	seq = MSG_ReadLong(msg);
+	s = MSG_ReadString(msg);
 
-    if(cl->lastClientCommand >= seq)
-        return qtrue;
+	if (cl->lastClientCommand >= seq)
+		return qtrue;
 
-    Com_DPrintf( "clientCommand: %s : %i : %s\n", cl->name, seq, s );
+	if (!strstr(s, "nextdl"))
+	{
+		Com_DPrintf( "clientCommand: %s : %i : %s\n", cl->name, seq, s );
+	}
 
-    if(seq > cl->lastClientCommand + 1) {
-        Com_Printf( "Client %s lost %i clientCommands\n", cl->name,
-                    seq - cl->lastClientCommand + 1 );
-        SV_DropClient( cl, "EXE_LOSTRELIABLECOMMANDS" );
-        return qfalse;
-    }
+	if (seq > cl->lastClientCommand + 1)
+	{
+		Com_Printf( "Client %s lost %i clientCommands\n", cl->name, seq - cl->lastClientCommand + 1 );
+		SV_DropClient( cl, "EXE_LOSTRELIABLECOMMANDS" );
+		return qfalse;
+	}
 
-    if(!strncmp("team", s, 4) || !strncmp("score", s, 5) || !strncmp("mr", s, 2))
-        floodprotect = qfalse;
+	//printf("####### PASS1 \n");
 
-    if(cl->state >= CS_ACTIVE && svs_time < *(int*)(&cl->state + 68360) && floodprotect)
-        clientOk = qfalse;
+	if (!strncmp("team", s, 4) || !strncmp("score", s, 5) || !strncmp("mr", s, 2))
+		floodprotect = qfalse;
 
-    if(floodprotect)
-        *(int*)((int)&cl->state + 68360) = svs_time + 800;
+	if (cl->state >= CS_ACTIVE && svs_time < *(int*)(&cl->state + 68632) && floodprotect)
+		clientOk = qfalse;
 
-    ucmd_t *u;
-    qboolean bProcessed = qfalse;
+	if (floodprotect)
+		*(int*)((int)&cl->state + 68632) = svs_time + 800;
 
-    Cmd_TokenizeString(s);
+	//printf("####### PASS2 \n");
 
-    cmd = Cmd_Argv(0);
+	ucmd_t *u;
+	qboolean bProcessed = qfalse;
+	Cmd_TokenizeString(s);
+	cmd = Cmd_Argv(0);
 
-    for( u = ucmds; u->name; u++) {
-        if(!strcmp(cmd, u->name)) {
-            u->func(cl);
-            bProcessed = qtrue;
-            break;
-        }
-    }
+	for ( u = ucmds; u->name; u++)
+	{
+		if (!strcmp(cmd, u->name))
+		{
+			u->func(cl);
+			bProcessed = qtrue;
+			break;
+		}
+	}
 
-    int duk_ret_val = 0;
+	//printf("####### PASS3 \n");
 
-    if(clientOk) {
-        if(!u->name && *(int*)0x8355260 == 2) {
+	if (clientOk)
+	{
+		//printf("####### clientOk \n");
+		if (!u->name && *(int*)0x836b820 == 2)
+		{
+			if (!Q_stricmp(cmd, "follownext") || !Q_stricmp(cmd, "followprev") || !Q_stricmp(cmd, "gc"))
+				goto skip_vm_call;
 
-            //long long timestamp = current_timestamp();
+			printf("####### VM_Call \n");
+			VM_Call(*(int*)0x80EE804, 6, get_client_number( cl ));
+		}
+	}
 
-#if 0
-            int result ;
+	//printf("####### PASS4 \n");
 
-			if(callbackPlayerCommand) {
-				Scr_AddInt(clientNum);
-				result = Scr_ExecEntThread(clientNum, 0, callbackPlayerCommand, 1);
-				Scr_FreeThread(result);
-			}
-#endif
-#ifdef BUILD_ECMASCRIPT
-            duk_push_global_object(js_context);
-
-			duk_get_prop_string(js_context, -1, "players");
-			duk_get_prop_index(js_context, -1, clientNum);
-			if(duk_has_prop_string(js_context, -3, "OnPlayerCommand")) {
-				duk_get_prop_string(js_context, -3, "OnPlayerCommand");
-
-				duk_dup(js_context, -2); //copy of player[idx] obj
-				int arrIdx = duk_push_array(js_context);
-				for(int i = 0; i < Cmd_Argc(); i++) {
-					duk_push_string(js_context, Cmd_Argv(i));
-					duk_put_prop_index(js_context, arrIdx, i);
-				}
-				if(duk_pcall(js_context, 2) != 0)
-					printf("Script Error (OnPlayerCommand): %s\n", duk_to_string(js_context, -1));
-				duk_ret_val = duk_to_int(js_context, -1);
-				duk_pop(js_context);
-			}
-			duk_pop(js_context); //players
-			duk_pop(js_context);
-#endif
-            if(duk_ret_val)
-                goto skip_vm_call;
-
-            if(!Q_stricmp(cmd, "follownext") || !Q_stricmp(cmd, "followprev") || !Q_stricmp(cmd, "gc"))
-                goto skip_vm_call;
-
-            if(!Q_stricmp(cmd, "say_team") || !Q_stricmp(cmd, "say_team")) {
-                if(x_clients[clientNum].muted)
-                    goto skip_vm_call;
-            }
-
-            VM_Call(*(int*)0x80E30C4, 6, get_client_number( cl )); //works
-            //VM_Call(gvm, GAME_CLIENT_COMMAND, get_client_number( cl ));
-            //((int (*)(int,...))GAME("vmMain"))(6,get_client_number(cl));
-            //((void (QDECL *)(int))GAME("ClientCommand"))(get_client_number(cl));
-        }
-    }
-
-    skip_vm_call:
-
-    cl->lastClientCommand = seq;
-    Com_sprintf(cl->lastClientCommandString, sizeof(cl->lastClientCommandString), "%s", s);
-    return 1;
-
-#if 0
-
-    last_client_number = (((int)&cl->state - *(int*)svsclients_ptr) / clientsize);
-	Com_DPrintf("last_client_number = %d\n", last_client_number);
-
-	return ((qboolean (*) (client_t*, msg_t*))0x8086E08)(cl, msg);
-#endif
+	skip_vm_call:
+	cl->lastClientCommand = seq;
+	//printf("####### PASS5 \n");
+	Com_sprintf(cl->lastClientCommandString, sizeof(cl->lastClientCommandString), "%s", s);
+	//printf("####### cl->lastClientCommandString = %s \n", cl->lastClientCommandString);
+	//printf("####### PASS6 \n");
+	return 1;
 }
 
 #if 0
